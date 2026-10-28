@@ -133,8 +133,14 @@ button.secondary {
   color: var(--text);
 }
 
-button.secondary:hover {
-  border-color: var(--muted);
+button.secondary:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button.secondary:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .status {

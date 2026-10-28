@@ -16,14 +16,14 @@ function render(state) {
   if (state.armed) {
     armBtn.textContent = "Armed — waiting for next request";
     armBtn.classList.add("armed");
-    disarmBtn.hidden = false;
+    disarmBtn.disabled = false;
     statusEl.className = "status armed";
     statusEl.textContent =
       "Armed. Click Send / submit on the page. The next matching request will fail with your error.";
   } else {
     armBtn.textContent = "Intercept next request";
     armBtn.classList.remove("armed");
-    disarmBtn.hidden = true;
+    disarmBtn.disabled = true;
     statusEl.className = "status idle";
     statusEl.textContent =
       "Idle — configure and arm to intercept the next matching request.";
