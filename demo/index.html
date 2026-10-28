@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Mock Request Error — Demo</title>
+  <style>
+    body { font: 16px/1.5 system-ui; max-width: 520px; margin: 40px auto; padding: 0 16px; }
+    button { padding: 10px 16px; font: inherit; cursor: pointer; }
+    pre { background: #111; color: #eee; padding: 12px; border-radius: 8px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Demo chat action</h1>
+  <p>Arm the extension, then click Send message. The request to <code>/api/messages</code> should fail with your mocked error.</p>
+  <button id="send">Send message</button>
+  <h2>Result</h2>
+  <pre id="out">No request yet.</pre>
+  <script>
+    document.getElementById('send').onclick = async () => {
+      const out = document.getElementById('out');
+      out.textContent = 'Sending…';
+      try {
+        const res = await fetch('/api/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: 'hello' }),
+        });
+        const text = await res.text();
+        out.textContent = `HTTP ${res.status}\n${text}`;
+      } catch (err) {
+        out.textContent = `Network error: ${err.message}`;
+      }
+    };
+  </script>
+</body>
+</html>

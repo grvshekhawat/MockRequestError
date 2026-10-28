@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mock Request Error</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Mock Request Error</h1>
+      <p class="subtitle">Arm once, then trigger the action you want to fail.</p>
+    </header>
+
+    <form id="form">
+      <label>
+        Error code
+        <input
+          id="statusCode"
+          type="number"
+          min="100"
+          max="599"
+          value="500"
+          required
+        />
+      </label>
+
+      <label>
+        Message <span class="optional">(optional)</span>
+        <input
+          id="message"
+          type="text"
+          placeholder="Internal Server Error"
+          maxlength="500"
+        />
+      </label>
+
+      <label>
+        URL filter <span class="optional">(optional)</span>
+        <input
+          id="urlFilter"
+          type="text"
+          placeholder="e.g. /api/messages or regex"
+        />
+      </label>
+
+      <div class="presets">
+        <button type="button" data-code="400" data-msg="Bad Request">400</button>
+        <button type="button" data-code="401" data-msg="Unauthorized">401</button>
+        <button type="button" data-code="403" data-msg="Forbidden">403</button>
+        <button type="button" data-code="404" data-msg="Not Found">404</button>
+        <button type="button" data-code="500" data-msg="Internal Server Error">500</button>
+        <button type="button" data-code="503" data-msg="Service Unavailable">503</button>
+      </div>
+
+      <div class="actions">
+        <button id="armBtn" type="submit" class="primary">Intercept next request</button>
+        <button id="disarmBtn" type="button" class="secondary" hidden>Cancel</button>
+      </div>
+    </form>
+
+    <div id="status" class="status idle" role="status">
+      Idle — configure and arm to intercept the next matching request.
+    </div>
+
+    <div id="last" class="last" hidden>
+      <h2>Last intercept</h2>
+      <pre id="lastDetails"></pre>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
