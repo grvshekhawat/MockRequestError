@@ -1,4 +1,7 @@
 (function () {
+  if (window.__mreContentInstalled) return;
+  window.__mreContentInstalled = true;
+
   const ATTR = "data-mre-config";
 
   function writeDomConfig(state) {
@@ -7,6 +10,7 @@
       statusCode: state.statusCode ?? 500,
       message: state.message || "",
       urlFilter: state.urlFilter || "",
+      armId: Number(state.armId) || 0,
     };
     try {
       const el = document.documentElement;
@@ -65,11 +69,34 @@
     }
 
     if (event.data.type === "INTERCEPTED") {
-      chrome.runtime.sendMessage({
-        type: "REQUEST_INTERCEPTED",
-        url: event.data.payload.url,
-        method: event.data.payload.method,
+      // Disarm in the page immediately so later requests are not mocked
+      // while the background round-trip is still in flight.
+      let current = {};
+      try {
+        current = JSON.parse(
+          document.documentElement?.getAttribute(ATTR) || "{}"
+        );
+      } catch {
+        current = {};
+      }
+      writeDomConfig({
+        ...current,
+        armed: false,
+        armId: event.data.payload.armId || current.armId || 0,
       });
+
+      chrome.runtime.sendMessage(
+        {
+          type: "REQUEST_INTERCEPTED",
+          url: event.data.payload.url,
+          method: event.data.payload.method,
+          armId: event.data.payload.armId || 0,
+        },
+        (state) => {
+          if (chrome.runtime.lastError || !state) return;
+          writeDomConfig(state);
+        }
+      );
     }
   });
 })();

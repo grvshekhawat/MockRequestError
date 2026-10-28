@@ -4,11 +4,12 @@ const DEFAULT_STATE = {
   message: "Internal Server Error",
   urlFilter: "",
   lastIntercept: null,
+  armId: 0,
 };
 
 async function getState() {
   const data = await chrome.storage.session.get("interceptState");
-  return data.interceptState || DEFAULT_STATE;
+  return { ...DEFAULT_STATE, ...(data.interceptState || {}) };
 }
 
 async function setState(next) {
@@ -30,32 +31,78 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "SET_STATE") {
-    const next = { ...DEFAULT_STATE, ...message.state };
-    setState(next).then(async () => {
-      if (next.armed) {
-        await ensureInjectedInActiveTab();
-      }
-      sendResponse({ ok: true });
-    });
+    getState()
+      .then(async (current) => {
+        const incoming = { ...message.state };
+        let armId = current.armId || 0;
+
+        if (incoming.armed) {
+          armId += 1;
+        }
+
+        const next = {
+          ...DEFAULT_STATE,
+          ...current,
+          ...incoming,
+          armId,
+          // Explicit disarm should never keep a stale armed flag.
+          armed: !!incoming.armed,
+        };
+
+        await setState(next);
+
+        if (next.armed) {
+          await ensureInjectedInActiveTab();
+          // Push the latest state again after inject (inject can race).
+          const latest = await getState();
+          await broadcastState(latest);
+        }
+
+        sendResponse({ ok: true, state: next });
+      })
+      .catch((err) => {
+        console.warn("Mock Request Error: SET_STATE failed", err);
+        sendResponse({ ok: false });
+      });
     return true;
   }
 
   if (message.type === "REQUEST_INTERCEPTED") {
-    getState().then(async (state) => {
-      const next = {
-        ...state,
-        armed: false,
-        lastIntercept: {
-          url: message.url,
-          method: message.method,
-          statusCode: state.statusCode,
-          message: state.message,
-          at: Date.now(),
-        },
-      };
-      await setState(next);
-      sendResponse({ ok: true });
-    });
+    getState()
+      .then(async (state) => {
+        const incomingArmId = Number(message.armId) || 0;
+
+        // Ignore duplicate intercept notifications for an already-consumed arm.
+        if (!state.armed && incomingArmId > 0 && incomingArmId < state.armId) {
+          sendResponse(state);
+          return;
+        }
+
+        const next = {
+          ...state,
+          armed: false,
+          lastIntercept: {
+            url: message.url,
+            method: message.method,
+            statusCode: state.statusCode,
+            message: state.message,
+            at: Date.now(),
+          },
+        };
+
+        // Only clear if this notification is for the current arm (or armId unknown).
+        if (!incomingArmId || incomingArmId === state.armId || state.armed) {
+          await setState(next);
+          sendResponse(next);
+          return;
+        }
+
+        sendResponse(state);
+      })
+      .catch((err) => {
+        console.warn("Mock Request Error: REQUEST_INTERCEPTED failed", err);
+        sendResponse(null);
+      });
     return true;
   }
 
@@ -95,7 +142,6 @@ async function ensureInjectedInActiveTab() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id || !isInjectableUrl(tab.url)) return;
 
-    // Re-inject hooks into the page world (covers tabs opened before install).
     await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
       files: ["inject.js"],
@@ -106,13 +152,6 @@ async function ensureInjectedInActiveTab() {
       target: { tabId: tab.id, allFrames: true },
       files: ["content.js"],
     });
-
-    const state = await getState();
-    try {
-      await chrome.tabs.sendMessage(tab.id, { type: "STATE_UPDATED", state });
-    } catch {
-      // ignore
-    }
   } catch (err) {
     console.warn("Mock Request Error: inject failed", err);
   }

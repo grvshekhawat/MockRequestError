@@ -9,16 +9,36 @@
     statusCode: 500,
     message: "Internal Server Error",
     urlFilter: "",
+    armId: 0,
   };
+
+  // Once an armId is consumed, ignore stale "armed: true" updates for that id.
+  let consumedArmId = 0;
+
+  function applyConfig(next) {
+    if (!next || typeof next !== "object") return;
+
+    const incomingArmId = Number(next.armId) || 0;
+
+    // Stale re-arm from a race (broadcast after intercept already consumed this arm).
+    if (next.armed && incomingArmId > 0 && incomingArmId <= consumedArmId) {
+      config = {
+        ...config,
+        ...next,
+        armed: false,
+        armId: incomingArmId,
+      };
+      return;
+    }
+
+    config = { ...config, ...next, armId: incomingArmId };
+  }
 
   function readConfigFromDom() {
     try {
       const raw = document.documentElement?.getAttribute(ATTR);
       if (!raw) return;
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") {
-        config = { ...config, ...parsed };
-      }
+      applyConfig(JSON.parse(raw));
     } catch {
       // ignore bad JSON
     }
@@ -28,11 +48,10 @@
     if (event.source !== window) return;
     if (!event.data || event.data.source !== "mock-request-error") return;
     if (event.data.type === "CONFIG" && event.data.payload) {
-      config = { ...config, ...event.data.payload };
+      applyConfig(event.data.payload);
     }
   });
 
-  // Ask the isolated content script for the latest config.
   window.postMessage({ source: "mock-request-error-page", type: "READY" }, "*");
 
   function matchesFilter(url) {
@@ -74,23 +93,28 @@
     }
   }
 
-  function notifyIntercepted(url, method) {
+  function notifyIntercepted(url, method, armId) {
     window.postMessage(
       {
         source: "mock-request-error-page",
         type: "INTERCEPTED",
-        payload: { url: String(url), method: method || "GET" },
+        payload: {
+          url: String(url),
+          method: method || "GET",
+          armId: armId || 0,
+        },
       },
       "*"
     );
   }
 
-  function disarmLocally() {
+  function disarmLocally(armId) {
+    consumedArmId = Math.max(consumedArmId, Number(armId) || config.armId || 0);
     config = { ...config, armed: false };
     try {
       document.documentElement?.setAttribute(
         ATTR,
-        JSON.stringify({ ...config, armed: false })
+        JSON.stringify({ ...config, armed: false, armId: config.armId })
       );
     } catch {
       // ignore
@@ -122,11 +146,12 @@
       return originalFetch(input, init);
     }
 
+    const armId = config.armId;
     const status = Number(config.statusCode) || 500;
     const statusText = config.message || "Error";
     const body = buildBody(status, statusText);
-    disarmLocally();
-    notifyIntercepted(url, method);
+    disarmLocally(armId);
+    notifyIntercepted(url, method, armId);
 
     return Promise.resolve(
       new Response(body, {
@@ -146,6 +171,7 @@
   XMLHttpRequest.prototype.open = function (method, url, ...rest) {
     this.__mreMethod = method;
     this.__mreUrl = url;
+    this.__mreIntercepted = false;
     return originalOpen.call(this, method, url, ...rest);
   };
 
@@ -157,36 +183,55 @@
       return originalSend.apply(this, args);
     }
 
+    const armId = config.armId;
     const status = Number(config.statusCode) || 500;
     const statusText = config.message || "Error";
     const body = buildBody(status, statusText);
-    disarmLocally();
-    notifyIntercepted(url, method);
+    this.__mreIntercepted = true;
+    disarmLocally(armId);
+    notifyIntercepted(url, method, armId);
 
     const xhr = this;
-    queueMicrotask(() => {
+
+    // Mock this response without permanently locking XHR fields for reuse.
+    const respond = () => {
+      if (!xhr.__mreIntercepted) return;
+
       try {
-        Object.defineProperty(xhr, "readyState", { configurable: true, get: () => 4 });
-        Object.defineProperty(xhr, "status", { configurable: true, get: () => status });
+        Object.defineProperty(xhr, "readyState", {
+          configurable: true,
+          writable: true,
+          value: 4,
+        });
+        Object.defineProperty(xhr, "status", {
+          configurable: true,
+          writable: true,
+          value: status,
+        });
         Object.defineProperty(xhr, "statusText", {
           configurable: true,
-          get: () => statusText,
+          writable: true,
+          value: statusText,
         });
         Object.defineProperty(xhr, "responseText", {
           configurable: true,
-          get: () => body,
+          writable: true,
+          value: body,
         });
         Object.defineProperty(xhr, "response", {
           configurable: true,
-          get: () => body,
+          writable: true,
+          value: body,
         });
       } catch {
-        // Some browsers lock these; still fire events best-effort.
+        // best effort
       }
 
       xhr.dispatchEvent(new Event("readystatechange"));
       xhr.dispatchEvent(new Event("load"));
       xhr.dispatchEvent(new Event("loadend"));
-    });
+    };
+
+    queueMicrotask(respond);
   };
 })();
