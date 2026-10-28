@@ -9,6 +9,8 @@
       armed: !!state.armed,
       statusCode: state.statusCode ?? 500,
       message: state.message || "",
+      contentType: state.contentType || "application/json",
+      responseBody: state.responseBody || "",
       urlFilter: state.urlFilter || "",
       armId: Number(state.armId) || 0,
     };

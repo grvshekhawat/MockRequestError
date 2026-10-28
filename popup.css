@@ -17,7 +17,9 @@
 
 body {
   margin: 0;
-  width: 320px;
+  width: 360px;
+  max-height: 560px;
+  overflow: auto;
   padding: 16px;
   font: 13px/1.45 "Segoe UI", system-ui, sans-serif;
   color: var(--text);
@@ -59,7 +61,9 @@ label {
   opacity: 0.8;
 }
 
-input {
+input,
+textarea,
+select {
   width: 100%;
   padding: 8px 10px;
   border: 1px solid var(--border);
@@ -70,9 +74,26 @@ input {
   outline: none;
 }
 
-input:focus {
+textarea {
+  resize: vertical;
+  min-height: 96px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
   border-color: var(--focus);
   box-shadow: 0 0 0 2px rgba(91, 159, 212, 0.25);
+}
+
+.hint {
+  margin: -4px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 400;
 }
 
 .presets {

@@ -1,5 +1,7 @@
 const statusCodeEl = document.getElementById("statusCode");
 const messageEl = document.getElementById("message");
+const contentTypeEl = document.getElementById("contentType");
+const responseBodyEl = document.getElementById("responseBody");
 const urlFilterEl = document.getElementById("urlFilter");
 const form = document.getElementById("form");
 const armBtn = document.getElementById("armBtn");
@@ -8,9 +10,17 @@ const statusEl = document.getElementById("status");
 const lastEl = document.getElementById("last");
 const lastDetailsEl = document.getElementById("lastDetails");
 
+function clampStatusCode(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 500;
+  return Math.min(599, Math.max(200, Math.round(n)));
+}
+
 function render(state) {
   statusCodeEl.value = state.statusCode ?? 500;
   messageEl.value = state.message ?? "";
+  contentTypeEl.value = state.contentType || "application/json";
+  responseBodyEl.value = state.responseBody ?? "";
   urlFilterEl.value = state.urlFilter ?? "";
 
   if (state.armed) {
@@ -19,14 +29,14 @@ function render(state) {
     disarmBtn.disabled = false;
     statusEl.className = "status armed";
     statusEl.textContent =
-      "Armed. Click Send / submit on the page. The next matching request will fail with your error.";
+      "Armed. Trigger the action on the page. The next matching request gets your status + body.";
   } else {
     armBtn.textContent = "Intercept next request";
     armBtn.classList.remove("armed");
     disarmBtn.disabled = true;
     statusEl.className = "status idle";
     statusEl.textContent =
-      "Idle — configure and arm to intercept the next matching request.";
+      "Idle — set status/body, then arm to intercept the next matching request.";
   }
 
   if (state.lastIntercept) {
@@ -35,8 +45,11 @@ function render(state) {
     lastDetailsEl.textContent = [
       `${hit.method} ${hit.url}`,
       `→ ${hit.statusCode}${hit.message ? ` ${hit.message}` : ""}`,
+      hit.contentType ? `Content-Type: ${hit.contentType}` : null,
       new Date(hit.at).toLocaleString(),
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
     if (!state.armed) {
       statusEl.className = "status hit";
       statusEl.textContent = "Last request was intercepted. Arm again to catch another.";
@@ -49,8 +62,10 @@ function render(state) {
 function readFormState(armed) {
   return {
     armed: !!armed,
-    statusCode: Number(statusCodeEl.value) || 500,
+    statusCode: clampStatusCode(statusCodeEl.value),
     message: messageEl.value.trim(),
+    contentType: contentTypeEl.value || "application/json",
+    responseBody: responseBodyEl.value,
     urlFilter: urlFilterEl.value.trim(),
   };
 }
@@ -89,7 +104,7 @@ disarmBtn.addEventListener("click", async () => {
   });
 });
 
-document.querySelectorAll(".presets button").forEach((btn) => {
+document.querySelectorAll("#presets button").forEach((btn) => {
   btn.addEventListener("click", () => {
     statusCodeEl.value = btn.dataset.code;
     messageEl.value = btn.dataset.msg || "";

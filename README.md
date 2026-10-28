@@ -13,13 +13,17 @@ Chrome extension that arms once, then intercepts the **next** `fetch` / `XMLHttp
 
 1. At `chrome://extensions`, click **Reload** on this extension after updates
 2. **Reload the tab** you are testing
-3. Open the popup, set an **error code** and optional **message**
-4. Set a **URL filter** (recommended), e.g. `messages` or `/api/`
-5. Click **Intercept next request** (badge shows `ON`)
-6. On the page, trigger the action (e.g. Send message)
-7. That request gets a mocked JSON error and the arm turns off
+3. Open the popup and set:
+   - **Status code** (200–599; presets included)
+   - Optional **status text**
+   - **Content-Type**
+   - Optional **response body** (raw text/JSON). Empty = auto JSON from status + message
+   - **URL filter** (recommended), e.g. `messages` or `/api/`
+4. Click **Intercept next request** (badge shows `ON`)
+5. On the page, trigger the action (e.g. Send message)
+6. That request gets your mocked response and the arm turns off
 
-If it still doesn’t intercept: open DevTools → Network, note the failing request URL path, put part of that path in the URL filter, re-arm, and try again.
+If it still doesn’t intercept: open DevTools → Network, note the request URL path, put part of that path in the URL filter, re-arm, and try again.
 
 **Note:** `fetch` does not throw on HTTP 4xx/5xx — it resolves with `response.ok === false`. Apps must check the status; the real network call is skipped when intercept works.
 

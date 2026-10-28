@@ -11,6 +11,8 @@
     armed: false,
     statusCode: 500,
     message: "Internal Server Error",
+    contentType: "application/json",
+    responseBody: "",
     urlFilter: "",
     armId: 0,
   };
@@ -68,16 +70,56 @@
     return matchesFilter(String(url));
   }
 
-  function buildBody(status, message) {
-    try {
-      return JSON.stringify({
-        error: true,
-        status,
-        message: message || "",
-      });
-    } catch {
-      return message || `Error ${status}`;
+  function normalizeStatus(code) {
+    const n = Number(code);
+    if (!Number.isFinite(n)) return 500;
+    return Math.min(599, Math.max(200, Math.round(n)));
+  }
+
+  function buildMock() {
+    const status = normalizeStatus(config.statusCode);
+    const statusText = (config.message || "").trim() || defaultStatusText(status);
+    const contentType = (config.contentType || "application/json").trim();
+    const customBody = typeof config.responseBody === "string" ? config.responseBody : "";
+
+    // Fetch forbids bodies for these statuses.
+    const noBody = status === 204 || status === 205 || status === 304;
+    let body = null;
+
+    if (!noBody) {
+      if (customBody.length > 0) {
+        body = customBody;
+      } else if (contentType.includes("json")) {
+        body = JSON.stringify({
+          error: status >= 400,
+          status,
+          message: statusText,
+        });
+      } else {
+        body = statusText || `Status ${status}`;
+      }
     }
+
+    return { status, statusText, contentType, body };
+  }
+
+  function defaultStatusText(status) {
+    const map = {
+      200: "OK",
+      201: "Created",
+      204: "No Content",
+      400: "Bad Request",
+      401: "Unauthorized",
+      403: "Forbidden",
+      404: "Not Found",
+      409: "Conflict",
+      422: "Unprocessable Entity",
+      429: "Too Many Requests",
+      500: "Internal Server Error",
+      502: "Bad Gateway",
+      503: "Service Unavailable",
+    };
+    return map[status] || "Error";
   }
 
   function notifyIntercepted(url, method, armId) {
@@ -149,7 +191,6 @@
   }
 
   function mockedFetch(input, init) {
-    // Re-read in case arm flipped between install and call.
     readConfigFromDom();
 
     const url = resolveUrl(input);
@@ -160,22 +201,24 @@
     }
 
     const armId = config.armId;
-    const status = Number(config.statusCode) || 500;
-    const statusText = config.message || "Error";
-    const body = buildBody(status, statusText);
+    const mock = buildMock();
 
     disarmAndRestore(armId);
     notifyIntercepted(url, method, armId);
 
+    const headers = {
+      "X-Mock-Request-Error": "1",
+      "Cache-Control": "no-store",
+    };
+    if (mock.body !== null) {
+      headers["Content-Type"] = mock.contentType;
+    }
+
     return Promise.resolve(
-      new Response(body, {
-        status,
-        statusText,
-        headers: {
-          "Content-Type": "application/json",
-          "X-Mock-Request-Error": "1",
-          "Cache-Control": "no-store",
-        },
+      new Response(mock.body, {
+        status: mock.status,
+        statusText: mock.statusText,
+        headers,
       })
     );
   }
@@ -199,9 +242,9 @@
     }
 
     const armId = config.armId;
-    const status = Number(config.statusCode) || 500;
-    const statusText = config.message || "Error";
-    const body = buildBody(status, statusText);
+    const mock = buildMock();
+    const bodyText = mock.body === null ? "" : String(mock.body);
+
     this.__mreIntercepted = true;
     this.__mrePatchedFields = [
       "readyState",
@@ -209,21 +252,29 @@
       "statusText",
       "responseText",
       "response",
+      "getAllResponseHeaders",
+      "getResponseHeader",
     ];
 
     disarmAndRestore(armId);
     notifyIntercepted(url, method, armId);
 
     const xhr = this;
+    const headerMap = {
+      "content-type": mock.body === null ? null : mock.contentType,
+      "x-mock-request-error": "1",
+      "cache-control": "no-store",
+    };
+
     queueMicrotask(() => {
       if (!xhr.__mreIntercepted) return;
       try {
         for (const [key, value] of [
           ["readyState", 4],
-          ["status", status],
-          ["statusText", statusText],
-          ["responseText", body],
-          ["response", body],
+          ["status", mock.status],
+          ["statusText", mock.statusText],
+          ["responseText", bodyText],
+          ["response", bodyText],
         ]) {
           Object.defineProperty(xhr, key, {
             configurable: true,
@@ -231,6 +282,22 @@
             value,
           });
         }
+        Object.defineProperty(xhr, "getAllResponseHeaders", {
+          configurable: true,
+          value: function () {
+            return Object.entries(headerMap)
+              .filter(([, v]) => v != null)
+              .map(([k, v]) => `${k}: ${v}`)
+              .join("\r\n");
+          },
+        });
+        Object.defineProperty(xhr, "getResponseHeader", {
+          configurable: true,
+          value: function (name) {
+            const key = String(name || "").toLowerCase();
+            return headerMap[key] ?? null;
+          },
+        });
       } catch {
         // best effort
       }
@@ -269,7 +336,6 @@
     }
   });
 
-  // Start clean: never leave hooks installed unless currently armed.
   uninstallHooks();
   readConfigFromDom();
   syncHooks();

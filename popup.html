@@ -14,19 +14,35 @@
 
     <form id="form">
       <label>
-        Error code
+        Status code
         <input
           id="statusCode"
           type="number"
-          min="100"
+          min="200"
           max="599"
           value="500"
           required
         />
       </label>
 
+      <div class="presets" id="presets">
+        <button type="button" data-code="200" data-msg="OK">200</button>
+        <button type="button" data-code="201" data-msg="Created">201</button>
+        <button type="button" data-code="204" data-msg="No Content">204</button>
+        <button type="button" data-code="400" data-msg="Bad Request">400</button>
+        <button type="button" data-code="401" data-msg="Unauthorized">401</button>
+        <button type="button" data-code="403" data-msg="Forbidden">403</button>
+        <button type="button" data-code="404" data-msg="Not Found">404</button>
+        <button type="button" data-code="409" data-msg="Conflict">409</button>
+        <button type="button" data-code="422" data-msg="Unprocessable Entity">422</button>
+        <button type="button" data-code="429" data-msg="Too Many Requests">429</button>
+        <button type="button" data-code="500" data-msg="Internal Server Error">500</button>
+        <button type="button" data-code="502" data-msg="Bad Gateway">502</button>
+        <button type="button" data-code="503" data-msg="Service Unavailable">503</button>
+      </div>
+
       <label>
-        Message <span class="optional">(optional)</span>
+        Status text <span class="optional">(optional)</span>
         <input
           id="message"
           type="text"
@@ -36,6 +52,29 @@
       </label>
 
       <label>
+        Content-Type
+        <select id="contentType">
+          <option value="application/json">application/json</option>
+          <option value="text/plain">text/plain</option>
+          <option value="application/xml">application/xml</option>
+          <option value="text/html">text/html</option>
+        </select>
+      </label>
+
+      <label>
+        Response body <span class="optional">(optional)</span>
+        <textarea
+          id="responseBody"
+          rows="6"
+          placeholder='{"error":true,"message":"Something went wrong"}'
+          spellcheck="false"
+        ></textarea>
+      </label>
+      <p class="hint">
+        Leave empty to auto-build JSON from status + message. For 204, body is omitted.
+      </p>
+
+      <label>
         URL filter <span class="optional">(recommended)</span>
         <input
           id="urlFilter"
@@ -43,15 +82,6 @@
           placeholder="e.g. messages|send|/api/"
         />
       </label>
-
-      <div class="presets">
-        <button type="button" data-code="400" data-msg="Bad Request">400</button>
-        <button type="button" data-code="401" data-msg="Unauthorized">401</button>
-        <button type="button" data-code="403" data-msg="Forbidden">403</button>
-        <button type="button" data-code="404" data-msg="Not Found">404</button>
-        <button type="button" data-code="500" data-msg="Internal Server Error">500</button>
-        <button type="button" data-code="503" data-msg="Service Unavailable">503</button>
-      </div>
 
       <div class="actions">
         <button id="armBtn" type="submit" class="primary">Intercept next request</button>

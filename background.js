@@ -2,6 +2,8 @@ const DEFAULT_STATE = {
   armed: false,
   statusCode: 500,
   message: "Internal Server Error",
+  contentType: "application/json",
+  responseBody: "",
   urlFilter: "",
   lastIntercept: null,
   armId: 0,
@@ -103,6 +105,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             method: message.method,
             statusCode: state.statusCode,
             message: state.message,
+            contentType: state.contentType,
             at: Date.now(),
           },
         };
