@@ -3,6 +3,9 @@
   window.__mockRequestErrorInstalled = true;
 
   const ATTR = "data-mre-config";
+  const originalFetch = window.fetch.bind(window);
+  const originalOpen = XMLHttpRequest.prototype.open;
+  const originalSend = XMLHttpRequest.prototype.send;
 
   let config = {
     armed: false,
@@ -11,27 +14,22 @@
     urlFilter: "",
     armId: 0,
   };
-
-  // Once an armId is consumed, ignore stale "armed: true" updates for that id.
   let consumedArmId = 0;
+  let hooksActive = false;
 
   function applyConfig(next) {
     if (!next || typeof next !== "object") return;
 
     const incomingArmId = Number(next.armId) || 0;
 
-    // Stale re-arm from a race (broadcast after intercept already consumed this arm).
     if (next.armed && incomingArmId > 0 && incomingArmId <= consumedArmId) {
-      config = {
-        ...config,
-        ...next,
-        armed: false,
-        armId: incomingArmId,
-      };
+      config = { ...config, ...next, armed: false, armId: incomingArmId };
+      syncHooks();
       return;
     }
 
     config = { ...config, ...next, armId: incomingArmId };
+    syncHooks();
   }
 
   function readConfigFromDom() {
@@ -40,19 +38,9 @@
       if (!raw) return;
       applyConfig(JSON.parse(raw));
     } catch {
-      // ignore bad JSON
+      // ignore
     }
   }
-
-  window.addEventListener("message", (event) => {
-    if (event.source !== window) return;
-    if (!event.data || event.data.source !== "mock-request-error") return;
-    if (event.data.type === "CONFIG" && event.data.payload) {
-      applyConfig(event.data.payload);
-    }
-  });
-
-  window.postMessage({ source: "mock-request-error-page", type: "READY" }, "*");
 
   function matchesFilter(url) {
     const filter = (config.urlFilter || "").trim();
@@ -75,7 +63,6 @@
   }
 
   function shouldIntercept(url) {
-    readConfigFromDom();
     if (!config.armed) return false;
     if (isNoise(url)) return false;
     return matchesFilter(String(url));
@@ -108,17 +95,20 @@
     );
   }
 
-  function disarmLocally(armId) {
-    consumedArmId = Math.max(consumedArmId, Number(armId) || config.armId || 0);
-    config = { ...config, armed: false };
+  function writeDomArmed(armed) {
     try {
-      document.documentElement?.setAttribute(
-        ATTR,
-        JSON.stringify({ ...config, armed: false, armId: config.armId })
-      );
+      const payload = { ...config, armed: !!armed };
+      config = payload;
+      document.documentElement?.setAttribute(ATTR, JSON.stringify(payload));
     } catch {
       // ignore
     }
+  }
+
+  function disarmAndRestore(armId) {
+    consumedArmId = Math.max(consumedArmId, Number(armId) || config.armId || 0);
+    writeDomArmed(false);
+    syncHooks();
   }
 
   function resolveUrl(input) {
@@ -137,8 +127,31 @@
     return "GET";
   }
 
-  const originalFetch = window.fetch.bind(window);
-  window.fetch = function mockedFetch(input, init) {
+  function clearXhrOverrides(xhr) {
+    if (!xhr || !xhr.__mrePatchedFields) return;
+    for (const key of xhr.__mrePatchedFields) {
+      try {
+        delete xhr[key];
+      } catch {
+        try {
+          Object.defineProperty(xhr, key, {
+            configurable: true,
+            writable: true,
+            value: undefined,
+          });
+        } catch {
+          // ignore
+        }
+      }
+    }
+    xhr.__mrePatchedFields = null;
+    xhr.__mreIntercepted = false;
+  }
+
+  function mockedFetch(input, init) {
+    // Re-read in case arm flipped between install and call.
+    readConfigFromDom();
+
     const url = resolveUrl(input);
     const method = resolveMethod(input, init);
 
@@ -150,7 +163,8 @@
     const status = Number(config.statusCode) || 500;
     const statusText = config.message || "Error";
     const body = buildBody(status, statusText);
-    disarmLocally(armId);
+
+    disarmAndRestore(armId);
     notifyIntercepted(url, method, armId);
 
     return Promise.resolve(
@@ -160,22 +174,23 @@
         headers: {
           "Content-Type": "application/json",
           "X-Mock-Request-Error": "1",
+          "Cache-Control": "no-store",
         },
       })
     );
-  };
+  }
 
-  const originalOpen = XMLHttpRequest.prototype.open;
-  const originalSend = XMLHttpRequest.prototype.send;
-
-  XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+  function mockedOpen(method, url, ...rest) {
+    clearXhrOverrides(this);
     this.__mreMethod = method;
     this.__mreUrl = url;
     this.__mreIntercepted = false;
     return originalOpen.call(this, method, url, ...rest);
-  };
+  }
 
-  XMLHttpRequest.prototype.send = function (...args) {
+  function mockedSend(...args) {
+    readConfigFromDom();
+
     const url = this.__mreUrl;
     const method = this.__mreMethod || "GET";
 
@@ -188,50 +203,76 @@
     const statusText = config.message || "Error";
     const body = buildBody(status, statusText);
     this.__mreIntercepted = true;
-    disarmLocally(armId);
+    this.__mrePatchedFields = [
+      "readyState",
+      "status",
+      "statusText",
+      "responseText",
+      "response",
+    ];
+
+    disarmAndRestore(armId);
     notifyIntercepted(url, method, armId);
 
     const xhr = this;
-
-    // Mock this response without permanently locking XHR fields for reuse.
-    const respond = () => {
+    queueMicrotask(() => {
       if (!xhr.__mreIntercepted) return;
-
       try {
-        Object.defineProperty(xhr, "readyState", {
-          configurable: true,
-          writable: true,
-          value: 4,
-        });
-        Object.defineProperty(xhr, "status", {
-          configurable: true,
-          writable: true,
-          value: status,
-        });
-        Object.defineProperty(xhr, "statusText", {
-          configurable: true,
-          writable: true,
-          value: statusText,
-        });
-        Object.defineProperty(xhr, "responseText", {
-          configurable: true,
-          writable: true,
-          value: body,
-        });
-        Object.defineProperty(xhr, "response", {
-          configurable: true,
-          writable: true,
-          value: body,
-        });
+        for (const [key, value] of [
+          ["readyState", 4],
+          ["status", status],
+          ["statusText", statusText],
+          ["responseText", body],
+          ["response", body],
+        ]) {
+          Object.defineProperty(xhr, key, {
+            configurable: true,
+            writable: true,
+            value,
+          });
+        }
       } catch {
         // best effort
       }
-
       xhr.dispatchEvent(new Event("readystatechange"));
       xhr.dispatchEvent(new Event("load"));
       xhr.dispatchEvent(new Event("loadend"));
-    };
+    });
+  }
 
-    queueMicrotask(respond);
-  };
+  function installHooks() {
+    if (hooksActive) return;
+    window.fetch = mockedFetch;
+    XMLHttpRequest.prototype.open = mockedOpen;
+    XMLHttpRequest.prototype.send = mockedSend;
+    hooksActive = true;
+  }
+
+  function uninstallHooks() {
+    if (!hooksActive) return;
+    window.fetch = originalFetch;
+    XMLHttpRequest.prototype.open = originalOpen;
+    XMLHttpRequest.prototype.send = originalSend;
+    hooksActive = false;
+  }
+
+  function syncHooks() {
+    if (config.armed) installHooks();
+    else uninstallHooks();
+  }
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== window) return;
+    if (!event.data || event.data.source !== "mock-request-error") return;
+    if (event.data.type === "CONFIG" && event.data.payload) {
+      applyConfig(event.data.payload);
+    }
+  });
+
+  // Start clean: never leave hooks installed unless currently armed.
+  uninstallHooks();
+  readConfigFromDom();
+  syncHooks();
+
+  window.postMessage({ source: "mock-request-error-page", type: "READY" }, "*");
 })();

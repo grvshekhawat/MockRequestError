@@ -13,10 +13,7 @@
       armId: Number(state.armId) || 0,
     };
     try {
-      const el = document.documentElement;
-      if (el) {
-        el.setAttribute(ATTR, JSON.stringify(payload));
-      }
+      document.documentElement?.setAttribute(ATTR, JSON.stringify(payload));
     } catch {
       // ignore
     }
@@ -32,11 +29,17 @@
 
   function loadAndPush() {
     chrome.runtime.sendMessage({ type: "GET_STATE" }, (state) => {
-      if (chrome.runtime.lastError || !state) return;
+      if (chrome.runtime.lastError || !state) {
+        // Fail safe: ensure page hooks are not armed.
+        writeDomConfig({ armed: false, armId: 0 });
+        return;
+      }
       writeDomConfig(state);
     });
   }
 
+  // Always start disarmed in the page; background may re-arm if needed.
+  writeDomConfig({ armed: false, armId: 0 });
   loadAndPush();
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -55,7 +58,7 @@
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if ((area === "session" || area === "local") && changes.interceptState) {
-      writeDomConfig(changes.interceptState.newValue || {});
+      writeDomConfig(changes.interceptState.newValue || { armed: false });
     }
   });
 
@@ -69,8 +72,6 @@
     }
 
     if (event.data.type === "INTERCEPTED") {
-      // Disarm in the page immediately so later requests are not mocked
-      // while the background round-trip is still in flight.
       let current = {};
       try {
         current = JSON.parse(
@@ -79,6 +80,7 @@
       } catch {
         current = {};
       }
+
       writeDomConfig({
         ...current,
         armed: false,
@@ -93,7 +95,10 @@
           armId: event.data.payload.armId || 0,
         },
         (state) => {
-          if (chrome.runtime.lastError || !state) return;
+          if (chrome.runtime.lastError || !state) {
+            writeDomConfig({ ...current, armed: false });
+            return;
+          }
           writeDomConfig(state);
         }
       );

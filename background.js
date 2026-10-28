@@ -13,20 +13,47 @@ async function getState() {
 }
 
 async function setState(next) {
-  await chrome.storage.session.set({ interceptState: next });
-  updateBadge(next.armed);
-  await broadcastState(next);
-  return next;
+  const normalized = {
+    ...DEFAULT_STATE,
+    ...next,
+    armed: !!next.armed,
+  };
+  await chrome.storage.session.set({ interceptState: normalized });
+  updateBadge(normalized.armed);
+  await broadcastState(normalized);
+  return normalized;
+}
+
+async function forceDisarm() {
+  const current = await getState();
+  return setState({
+    ...current,
+    armed: false,
+  });
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.session.set({ interceptState: DEFAULT_STATE });
+  chrome.storage.session.set({ interceptState: { ...DEFAULT_STATE } });
   updateBadge(false);
 });
 
+// Browser restart must never leave a sticky armed flag.
+chrome.runtime.onStartup.addListener(() => {
+  forceDisarm();
+});
+
+// Sync badge when the service worker wakes; do not change armed mid-session.
+getState()
+  .then((state) => updateBadge(!!state.armed))
+  .catch(() => updateBadge(false));
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "GET_STATE") {
-    getState().then(sendResponse);
+    getState().then((state) => {
+      // Never report sticky armed from a previous crashed session without badge sync.
+      if (!state.armed) updateBadge(false);
+      sendResponse(state);
+    });
     return true;
   }
 
@@ -45,7 +72,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           ...current,
           ...incoming,
           armId,
-          // Explicit disarm should never keep a stale armed flag.
           armed: !!incoming.armed,
         };
 
@@ -53,7 +79,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
         if (next.armed) {
           await ensureInjectedInActiveTab();
-          // Push the latest state again after inject (inject can race).
           const latest = await getState();
           await broadcastState(latest);
         }
@@ -70,14 +95,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "REQUEST_INTERCEPTED") {
     getState()
       .then(async (state) => {
-        const incomingArmId = Number(message.armId) || 0;
-
-        // Ignore duplicate intercept notifications for an already-consumed arm.
-        if (!state.armed && incomingArmId > 0 && incomingArmId < state.armId) {
-          sendResponse(state);
-          return;
-        }
-
         const next = {
           ...state,
           armed: false,
@@ -89,15 +106,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             at: Date.now(),
           },
         };
-
-        // Only clear if this notification is for the current arm (or armId unknown).
-        if (!incomingArmId || incomingArmId === state.armId || state.armed) {
-          await setState(next);
-          sendResponse(next);
-          return;
-        }
-
-        sendResponse(state);
+        await setState(next);
+        sendResponse(next);
       })
       .catch((err) => {
         console.warn("Mock Request Error: REQUEST_INTERCEPTED failed", err);
