@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Mock Request Error",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Intercept the next network request and return a custom error status and message.",
   "permissions": ["storage", "activeTab", "scripting"],
+  "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup.html",
     "default_title": "Mock Request Error",
@@ -23,16 +24,17 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      "matches": ["http://*/*", "https://*/*", "file://*/*"],
+      "js": ["inject.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": ["http://*/*", "https://*/*", "file://*/*"],
       "js": ["content.js"],
       "run_at": "document_start",
       "all_frames": true
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": ["inject.js"],
-      "matches": ["<all_urls>"]
     }
   ]
 }

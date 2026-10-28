@@ -6,6 +6,18 @@ const DEFAULT_STATE = {
   lastIntercept: null,
 };
 
+async function getState() {
+  const data = await chrome.storage.session.get("interceptState");
+  return data.interceptState || DEFAULT_STATE;
+}
+
+async function setState(next) {
+  await chrome.storage.session.set({ interceptState: next });
+  updateBadge(next.armed);
+  await broadcastState(next);
+  return next;
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.session.set({ interceptState: DEFAULT_STATE });
   updateBadge(false);
@@ -13,25 +25,23 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "GET_STATE") {
-    chrome.storage.session.get("interceptState").then((data) => {
-      sendResponse(data.interceptState || DEFAULT_STATE);
-    });
+    getState().then(sendResponse);
     return true;
   }
 
   if (message.type === "SET_STATE") {
     const next = { ...DEFAULT_STATE, ...message.state };
-    chrome.storage.session.set({ interceptState: next }).then(() => {
-      updateBadge(next.armed);
-      broadcastState(next);
+    setState(next).then(async () => {
+      if (next.armed) {
+        await ensureInjectedInActiveTab();
+      }
       sendResponse({ ok: true });
     });
     return true;
   }
 
   if (message.type === "REQUEST_INTERCEPTED") {
-    chrome.storage.session.get("interceptState").then((data) => {
-      const state = data.interceptState || DEFAULT_STATE;
+    getState().then(async (state) => {
       const next = {
         ...state,
         armed: false,
@@ -43,11 +53,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           at: Date.now(),
         },
       };
-      chrome.storage.session.set({ interceptState: next }).then(() => {
-        updateBadge(false);
-        broadcastState(next);
-        sendResponse({ ok: true });
-      });
+      await setState(next);
+      sendResponse({ ok: true });
     });
     return true;
   }
@@ -63,11 +70,50 @@ function updateBadge(armed) {
 async function broadcastState(state) {
   try {
     const tabs = await chrome.tabs.query({});
-    for (const tab of tabs) {
-      if (!tab.id) continue;
-      chrome.tabs.sendMessage(tab.id, { type: "STATE_UPDATED", state }).catch(() => {});
-    }
+    await Promise.all(
+      tabs.map(async (tab) => {
+        if (!tab.id || !isInjectableUrl(tab.url)) return;
+        try {
+          await chrome.tabs.sendMessage(tab.id, { type: "STATE_UPDATED", state });
+        } catch {
+          // content script may not be present yet
+        }
+      })
+    );
   } catch {
     // ignore
+  }
+}
+
+function isInjectableUrl(url) {
+  if (!url) return false;
+  return /^(https?:|file:)/i.test(url);
+}
+
+async function ensureInjectedInActiveTab() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !isInjectableUrl(tab.url)) return;
+
+    // Re-inject hooks into the page world (covers tabs opened before install).
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
+      files: ["inject.js"],
+      world: "MAIN",
+    });
+
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
+      files: ["content.js"],
+    });
+
+    const state = await getState();
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: "STATE_UPDATED", state });
+    } catch {
+      // ignore
+    }
+  } catch (err) {
+    console.warn("Mock Request Error: inject failed", err);
   }
 }

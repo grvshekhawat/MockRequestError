@@ -9,7 +9,7 @@
   <body>
     <header>
       <h1>Mock Request Error</h1>
-      <p class="subtitle">Arm once, then trigger the action you want to fail.</p>
+      <p class="subtitle">Arm once, then trigger the action. Use a URL filter so analytics don’t steal the intercept.</p>
     </header>
 
     <form id="form">
@@ -36,11 +36,11 @@
       </label>
 
       <label>
-        URL filter <span class="optional">(optional)</span>
+        URL filter <span class="optional">(recommended)</span>
         <input
           id="urlFilter"
           type="text"
-          placeholder="e.g. /api/messages or regex"
+          placeholder="e.g. messages|send|/api/"
         />
       </label>
 
