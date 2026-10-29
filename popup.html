@@ -9,7 +9,9 @@
   <body>
     <header>
       <h1>Mock Request Error</h1>
-      <p class="subtitle">Pick an API, or just arm to catch the next request. Optional URL filter still works.</p>
+      <p class="subtitle">
+        Network-layer intercept (works on real apps). Close DevTools on the tab before arming. Chrome may show a debugging banner while armed.
+      </p>
     </header>
 
     <section class="request-picker">
@@ -21,7 +23,7 @@
         </div>
       </div>
       <p class="hint">
-        Use the page first (click Send, load data), then open this popup and pick the request.
+        Trigger the action once first, then pick it here. Or arm with a URL filter / next XHR-Fetch.
       </p>
       <div id="selectedApi" class="selected-api" hidden></div>
       <div id="requestList" class="request-list">
@@ -90,11 +92,11 @@
       </label>
 
       <label>
-        URL filter <span class="optional">(fallback if no API selected)</span>
+        URL filter <span class="optional">(optional)</span>
         <input
           id="urlFilter"
           type="text"
-          placeholder="e.g. messages|send|/api/"
+          placeholder="e.g. /api/messages"
         />
       </label>
 
@@ -102,9 +104,6 @@
         <input id="continuous" type="checkbox" />
         <span>Continuous intercept <span class="optional">(until Stop)</span></span>
       </label>
-      <p class="hint">
-        Off = next matching request only. On = keep mocking matches until you stop. Prefer a selected API or filter in continuous mode.
-      </p>
 
       <div class="actions">
         <button id="armBtn" type="submit" class="primary">Intercept next request</button>
@@ -115,7 +114,7 @@
     </form>
 
     <div id="status" class="status idle" role="status">
-      Idle — select an API, set status/body, then arm.
+      Idle — select an API or set a filter, then arm.
     </div>
 
     <div id="last" class="last" hidden>

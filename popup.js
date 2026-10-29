@@ -17,6 +17,7 @@ const clearRequestsBtn = document.getElementById("clearRequests");
 
 let selectedUrl = "";
 let selectedMethod = "";
+let lastRequests = [];
 
 function clampStatusCode(value) {
   const n = Number(value);
@@ -64,8 +65,6 @@ function renderSelectedApi() {
   selectedApiEl.append(label, value, clearBtn);
 }
 
-let lastRequests = [];
-
 function renderRequestList(requests) {
   lastRequests = requests || [];
   requestListEl.innerHTML = "";
@@ -99,7 +98,6 @@ function renderRequestList(requests) {
     btn.addEventListener("click", () => {
       selectedUrl = req.url;
       selectedMethod = req.method;
-      // Keep a readable fallback filter too.
       try {
         urlFilterEl.value = new URL(req.url).pathname;
       } catch {
@@ -134,6 +132,11 @@ function render(state) {
   selectedMethod = state.selectedMethod || "";
   renderSelectedApi();
 
+  if (state.lastError) {
+    statusEl.className = "status hit";
+    statusEl.textContent = state.lastError;
+  }
+
   if (state.armed) {
     armBtn.textContent = state.continuous
       ? "Armed — continuous"
@@ -141,24 +144,20 @@ function render(state) {
     armBtn.classList.add("armed");
     disarmBtn.disabled = false;
     statusEl.className = "status armed";
-    if (state.continuous) {
-      statusEl.textContent = selectedUrl
-        ? `Continuous: mocking ${selectedMethod || ""} ${shortUrl(selectedUrl)} until Stop.`
-        : "Continuous: mocking matching requests until you press Stop.";
-    } else {
-      statusEl.textContent = selectedUrl
-        ? `Armed for ${selectedMethod || ""} ${shortUrl(selectedUrl)}. Trigger that action on the page.`
-        : "Armed. Trigger the action on the page. The next matching request gets your status + body.";
-    }
+    statusEl.textContent = state.continuous
+      ? "Continuous: mocking matching XHR/Fetch until Stop. A debugging banner may appear."
+      : "Armed. Trigger the action. Matching XHR/Fetch will be mocked. A debugging banner may appear.";
   } else {
     armBtn.textContent = continuousEl.checked
       ? "Start continuous intercept"
       : "Intercept next request";
     armBtn.classList.remove("armed");
     disarmBtn.disabled = true;
-    statusEl.className = "status idle";
-    statusEl.textContent =
-      "Idle — select an API or set a filter (optional), then arm.";
+    if (!state.lastError) {
+      statusEl.className = "status idle";
+      statusEl.textContent =
+        "Idle — select an API or set a filter (optional), then arm.";
+    }
   }
 
   if (state.lastIntercept) {
@@ -172,9 +171,10 @@ function render(state) {
     ]
       .filter(Boolean)
       .join("\n");
-    if (!state.armed) {
+    if (!state.armed && !state.lastError) {
       statusEl.className = "status hit";
-      statusEl.textContent = "Last request was intercepted. Arm again to catch another.";
+      statusEl.textContent =
+        "Last request was intercepted. Arm again to catch another.";
     }
   } else {
     lastEl.hidden = true;
@@ -206,9 +206,10 @@ function setState(partial) {
   return new Promise((resolve) => {
     chrome.runtime.sendMessage({ type: "GET_STATE" }, (current) => {
       const next = { ...current, ...partial };
-      chrome.runtime.sendMessage({ type: "SET_STATE", state: next }, () => {
-        render(next);
-        resolve(next);
+      chrome.runtime.sendMessage({ type: "SET_STATE", state: next }, (result) => {
+        const state = result?.state || next;
+        render(state);
+        resolve(state);
       });
     });
   });
@@ -220,9 +221,16 @@ form.addEventListener("submit", async (event) => {
     chrome.runtime.sendMessage({ type: "GET_STATE" }, resolve);
   });
 
+  const formState = readFormState(true);
+  if (!selectedUrl) {
+    formState.selectedUrl = "";
+    formState.selectedMethod = "";
+  }
+
   await setState({
-    ...readFormState(true),
+    ...formState,
     lastIntercept: current?.lastIntercept || null,
+    lastError: "",
   });
 });
 
@@ -233,6 +241,7 @@ disarmBtn.addEventListener("click", async () => {
   await setState({
     ...readFormState(false),
     lastIntercept: current?.lastIntercept || null,
+    lastError: "",
   });
 });
 
