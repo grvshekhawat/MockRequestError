@@ -2,7 +2,6 @@
   if (window.__mockRequestErrorInstalled) return;
   window.__mockRequestErrorInstalled = true;
 
-  const ATTR = "data-mre-config";
   const originalFetch = window.fetch.bind(window);
   const originalOpen = XMLHttpRequest.prototype.open;
   const originalSend = XMLHttpRequest.prototype.send;
@@ -10,10 +9,13 @@
   let config = {
     armed: false,
     statusCode: 500,
-    message: "Internal Server Error",
-    contentType: "application/json",
+    message: "",
+    contentType: "auto",
     responseBody: "",
     urlFilter: "",
+    continuous: false,
+    selectedUrl: "",
+    selectedMethod: "",
     armId: 0,
   };
   let consumedArmId = 0;
@@ -25,22 +27,62 @@
     const incomingArmId = Number(next.armId) || 0;
 
     if (next.armed && incomingArmId > 0 && incomingArmId <= consumedArmId) {
-      config = { ...config, ...next, armed: false, armId: incomingArmId };
+      config = {
+        ...config,
+        ...next,
+        armed: false,
+        armId: incomingArmId,
+        // Keep previously armed response body if stale update omitted it.
+        responseBody:
+          typeof next.responseBody === "string"
+            ? next.responseBody
+            : config.responseBody,
+      };
       syncHooks();
       return;
     }
 
-    config = { ...config, ...next, armId: incomingArmId };
+    config = {
+      ...config,
+      ...next,
+      armId: incomingArmId,
+      responseBody:
+        typeof next.responseBody === "string"
+          ? next.responseBody
+          : config.responseBody || "",
+    };
+    window.__MRE_STATE = { ...config };
     syncHooks();
   }
 
-  function readConfigFromDom() {
+  function readConfigFromWindow() {
     try {
-      const raw = document.documentElement?.getAttribute(ATTR);
-      if (!raw) return;
-      applyConfig(JSON.parse(raw));
+      if (window.__MRE_STATE && typeof window.__MRE_STATE === "object") {
+        applyConfig(window.__MRE_STATE);
+      }
     } catch {
       // ignore
+    }
+  }
+
+  function matchesSelected(url, method) {
+    const selected = (config.selectedUrl || "").trim();
+    if (!selected) return null;
+
+    const selectedMethod = (config.selectedMethod || "").trim().toUpperCase();
+    if (selectedMethod && method && selectedMethod !== String(method).toUpperCase()) {
+      return false;
+    }
+
+    try {
+      const actual = new URL(String(url), location.href);
+      const target = new URL(selected, location.href);
+      // Match origin + path; allow query-string differences.
+      return (
+        actual.origin === target.origin && actual.pathname === target.pathname
+      );
+    } catch {
+      return String(url) === selected || String(url).includes(selected);
     }
   }
 
@@ -64,9 +106,14 @@
     );
   }
 
-  function shouldIntercept(url) {
+  function shouldIntercept(url, method) {
+    readConfigFromWindow();
     if (!config.armed) return false;
     if (isNoise(url)) return false;
+
+    const selectedMatch = matchesSelected(url, method);
+    if (selectedMatch !== null) return selectedMatch;
+
     return matchesFilter(String(url));
   }
 
@@ -76,31 +123,44 @@
     return Math.min(599, Math.max(200, Math.round(n)));
   }
 
-  function buildMock() {
-    const status = normalizeStatus(config.statusCode);
-    const statusText = (config.message || "").trim() || defaultStatusText(status);
-    const contentType = (config.contentType || "application/json").trim();
-    const customBody = typeof config.responseBody === "string" ? config.responseBody : "";
+  function sanitizeStatusText(text) {
+    // Response statusText must be a ByteString (latin1).
+    return String(text || "")
+      .replace(/[^\x20-\x7E]/g, "")
+      .slice(0, 100);
+  }
 
-    // Fetch forbids bodies for these statuses.
-    const noBody = status === 204 || status === 205 || status === 304;
-    let body = null;
+  function detectContentType(body, explicit) {
+    const chosen = (explicit || "auto").trim().toLowerCase();
+    if (chosen && chosen !== "auto") return chosen;
 
-    if (!noBody) {
-      if (customBody.length > 0) {
-        body = customBody;
-      } else if (contentType.includes("json")) {
-        body = JSON.stringify({
-          error: status >= 400,
-          status,
-          message: statusText,
-        });
-      } else {
-        body = statusText || `Status ${status}`;
+    const raw = String(body || "").trim();
+    if (!raw) return "application/json";
+
+    if (
+      (raw.startsWith("{") && raw.endsWith("}")) ||
+      (raw.startsWith("[") && raw.endsWith("]"))
+    ) {
+      try {
+        JSON.parse(raw);
+        return "application/json";
+      } catch {
+        // fall through
       }
     }
 
-    return { status, statusText, contentType, body };
+    if (raw.startsWith("<?xml") || /^<\w+[\s>]/.test(raw)) {
+      if (/^<!doctype html/i.test(raw) || /^<html[\s>]/i.test(raw)) {
+        return "text/html";
+      }
+      return "application/xml";
+    }
+
+    if (/^<!doctype html/i.test(raw) || /^<html[\s>]/i.test(raw)) {
+      return "text/html";
+    }
+
+    return "text/plain";
   }
 
   function defaultStatusText(status) {
@@ -122,7 +182,37 @@
     return map[status] || "Error";
   }
 
-  function notifyIntercepted(url, method, armId) {
+  function buildMock() {
+    const status = normalizeStatus(config.statusCode);
+    const statusText = sanitizeStatusText(
+      (config.message || "").trim() || defaultStatusText(status)
+    );
+    const customBody =
+      typeof config.responseBody === "string" ? config.responseBody : "";
+    const noBody = status === 204 || status === 205 || status === 304;
+
+    let body = null;
+    if (!noBody) {
+      if (customBody.length > 0) {
+        body = customBody;
+      } else {
+        body = JSON.stringify({
+          error: status >= 400,
+          status,
+          message: statusText || defaultStatusText(status),
+        });
+      }
+    }
+
+    const contentType = detectContentType(
+      body === null ? "" : body,
+      config.contentType
+    );
+
+    return { status, statusText, contentType, body };
+  }
+
+  function notifyIntercepted(url, method, armId, mock, continuous) {
     window.postMessage(
       {
         source: "mock-request-error-page",
@@ -131,26 +221,29 @@
           url: String(url),
           method: method || "GET",
           armId: armId || 0,
+          statusCode: mock?.status,
+          contentType: mock?.contentType,
+          continuous: !!continuous,
         },
       },
       "*"
     );
   }
 
-  function writeDomArmed(armed) {
-    try {
-      const payload = { ...config, armed: !!armed };
-      config = payload;
-      document.documentElement?.setAttribute(ATTR, JSON.stringify(payload));
-    } catch {
-      // ignore
-    }
-  }
-
   function disarmAndRestore(armId) {
     consumedArmId = Math.max(consumedArmId, Number(armId) || config.armId || 0);
-    writeDomArmed(false);
+    config = { ...config, armed: false };
+    window.__MRE_STATE = { ...config, armed: false };
     syncHooks();
+  }
+
+  function afterIntercept(armId, url, method, mock) {
+    const continuous = !!config.continuous;
+    notifyIntercepted(url, method, armId, mock, continuous);
+    if (!continuous) {
+      disarmAndRestore(armId);
+    }
+    // Continuous: keep hooks + armed until user presses Stop.
   }
 
   function resolveUrl(input) {
@@ -175,15 +268,7 @@
       try {
         delete xhr[key];
       } catch {
-        try {
-          Object.defineProperty(xhr, key, {
-            configurable: true,
-            writable: true,
-            value: undefined,
-          });
-        } catch {
-          // ignore
-        }
+        // ignore
       }
     }
     xhr.__mrePatchedFields = null;
@@ -191,36 +276,43 @@
   }
 
   function mockedFetch(input, init) {
-    readConfigFromDom();
-
     const url = resolveUrl(input);
     const method = resolveMethod(input, init);
 
-    if (!shouldIntercept(url)) {
+    if (!shouldIntercept(url, method)) {
       return originalFetch(input, init);
     }
 
     const armId = config.armId;
-    const mock = buildMock();
-
-    disarmAndRestore(armId);
-    notifyIntercepted(url, method, armId);
-
-    const headers = {
-      "X-Mock-Request-Error": "1",
-      "Cache-Control": "no-store",
-    };
-    if (mock.body !== null) {
-      headers["Content-Type"] = mock.contentType;
+    let mock;
+    try {
+      mock = buildMock();
+    } catch (err) {
+      if (!config.continuous) disarmAndRestore(armId);
+      return Promise.reject(err);
     }
 
-    return Promise.resolve(
-      new Response(mock.body, {
-        status: mock.status,
-        statusText: mock.statusText,
-        headers,
-      })
-    );
+    afterIntercept(armId, url, method, mock);
+
+    try {
+      const headers = {
+        "X-Mock-Request-Error": "1",
+        "Cache-Control": "no-store",
+      };
+      if (mock.body !== null) {
+        headers["Content-Type"] = mock.contentType;
+      }
+
+      return Promise.resolve(
+        new Response(mock.body, {
+          status: mock.status,
+          statusText: mock.statusText,
+          headers,
+        })
+      );
+    } catch (err) {
+      return Promise.reject(err);
+    }
   }
 
   function mockedOpen(method, url, ...rest) {
@@ -232,12 +324,10 @@
   }
 
   function mockedSend(...args) {
-    readConfigFromDom();
-
     const url = this.__mreUrl;
     const method = this.__mreMethod || "GET";
 
-    if (!shouldIntercept(url)) {
+    if (!shouldIntercept(url, method)) {
       return originalSend.apply(this, args);
     }
 
@@ -256,8 +346,7 @@
       "getResponseHeader",
     ];
 
-    disarmAndRestore(armId);
-    notifyIntercepted(url, method, armId);
+    afterIntercept(armId, url, method, mock);
 
     const xhr = this;
     const headerMap = {
@@ -336,8 +425,12 @@
     }
   });
 
+  window.addEventListener("__mre_config", (event) => {
+    if (event?.detail) applyConfig(event.detail);
+  });
+
   uninstallHooks();
-  readConfigFromDom();
+  readConfigFromWindow();
   syncHooks();
 
   window.postMessage({ source: "mock-request-error-page", type: "READY" }, "*");

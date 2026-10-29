@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Mock Request Error",
-  "version": "1.4.0",
-  "description": "Intercept the next network request and return a custom error status and message.",
-  "permissions": ["storage", "activeTab", "scripting"],
+  "version": "1.7.0",
+  "description": "Intercept the next network request and return a custom status and response body.",
+  "permissions": ["storage", "activeTab", "scripting", "webRequest"],
   "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup.html",

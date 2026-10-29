@@ -9,8 +9,25 @@
   <body>
     <header>
       <h1>Mock Request Error</h1>
-      <p class="subtitle">Arm once, then trigger the action. Use a URL filter so analytics don’t steal the intercept.</p>
+      <p class="subtitle">Pick an API, or just arm to catch the next request. Optional URL filter still works.</p>
     </header>
+
+    <section class="request-picker">
+      <div class="section-head">
+        <h2>Select API</h2>
+        <div class="section-actions">
+          <button type="button" id="refreshRequests" class="linkish">Refresh</button>
+          <button type="button" id="clearRequests" class="linkish">Clear</button>
+        </div>
+      </div>
+      <p class="hint">
+        Use the page first (click Send, load data), then open this popup and pick the request.
+      </p>
+      <div id="selectedApi" class="selected-api" hidden></div>
+      <div id="requestList" class="request-list">
+        <div class="empty">No API requests captured yet for this tab.</div>
+      </div>
+    </section>
 
     <form id="form">
       <label>
@@ -54,6 +71,7 @@
       <label>
         Content-Type
         <select id="contentType">
+          <option value="auto" selected>Auto (detect from body)</option>
           <option value="application/json">application/json</option>
           <option value="text/plain">text/plain</option>
           <option value="application/xml">application/xml</option>
@@ -65,23 +83,28 @@
         Response body <span class="optional">(optional)</span>
         <textarea
           id="responseBody"
-          rows="6"
+          rows="5"
           placeholder='{"error":true,"message":"Something went wrong"}'
           spellcheck="false"
         ></textarea>
       </label>
-      <p class="hint">
-        Leave empty to auto-build JSON from status + message. For 204, body is omitted.
-      </p>
 
       <label>
-        URL filter <span class="optional">(recommended)</span>
+        URL filter <span class="optional">(fallback if no API selected)</span>
         <input
           id="urlFilter"
           type="text"
           placeholder="e.g. messages|send|/api/"
         />
       </label>
+
+      <label class="checkbox">
+        <input id="continuous" type="checkbox" />
+        <span>Continuous intercept <span class="optional">(until Stop)</span></span>
+      </label>
+      <p class="hint">
+        Off = next matching request only. On = keep mocking matches until you stop. Prefer a selected API or filter in continuous mode.
+      </p>
 
       <div class="actions">
         <button id="armBtn" type="submit" class="primary">Intercept next request</button>
@@ -92,7 +115,7 @@
     </form>
 
     <div id="status" class="status idle" role="status">
-      Idle — configure and arm to intercept the next matching request.
+      Idle — select an API, set status/body, then arm.
     </div>
 
     <div id="last" class="last" hidden>

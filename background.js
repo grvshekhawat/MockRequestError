@@ -2,12 +2,19 @@ const DEFAULT_STATE = {
   armed: false,
   statusCode: 500,
   message: "Internal Server Error",
-  contentType: "application/json",
+  contentType: "auto",
   responseBody: "",
   urlFilter: "",
+  continuous: false,
+  selectedUrl: "",
+  selectedMethod: "",
   lastIntercept: null,
   armId: 0,
 };
+
+/** @type {Map<number, Array<{method: string, url: string, path: string, at: number}>>} */
+const recentByTab = new Map();
+const MAX_RECENT = 40;
 
 async function getState() {
   const data = await chrome.storage.session.get("interceptState");
@@ -19,9 +26,15 @@ async function setState(next) {
     ...DEFAULT_STATE,
     ...next,
     armed: !!next.armed,
+    continuous: !!next.continuous,
+    contentType: next.contentType || "auto",
+    responseBody:
+      typeof next.responseBody === "string" ? next.responseBody : "",
+    selectedUrl: next.selectedUrl || "",
+    selectedMethod: next.selectedMethod || "",
   };
   await chrome.storage.session.set({ interceptState: normalized });
-  updateBadge(normalized.armed);
+  updateBadge(normalized.armed, normalized.continuous);
   await broadcastState(normalized);
   return normalized;
 }
@@ -34,28 +47,93 @@ async function forceDisarm() {
   });
 }
 
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.session.set({ interceptState: { ...DEFAULT_STATE } });
-  updateBadge(false);
+function recordRecent(tabId, method, url) {
+  if (!tabId || tabId < 0 || !url) return;
+  if (!/^https?:/i.test(url)) return;
+
+  let path = url;
+  try {
+    const u = new URL(url);
+    path = u.pathname + u.search;
+  } catch {
+    // keep raw
+  }
+
+  const entry = {
+    method: (method || "GET").toUpperCase(),
+    url,
+    path,
+    at: Date.now(),
+  };
+
+  const list = recentByTab.get(tabId) || [];
+  const key = `${entry.method} ${entry.url}`;
+  const next = [entry, ...list.filter((item) => `${item.method} ${item.url}` !== key)];
+  recentByTab.set(tabId, next.slice(0, MAX_RECENT));
+}
+
+chrome.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    if (details.type !== "xmlhttprequest") return;
+    recordRecent(details.tabId, details.method, details.url);
+  },
+  { urls: ["<all_urls>"], types: ["xmlhttprequest"] }
+);
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  recentByTab.delete(tabId);
 });
 
-// Browser restart must never leave a sticky armed flag.
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.storage.session.set({ interceptState: { ...DEFAULT_STATE } });
+  updateBadge(false, false);
+});
+
 chrome.runtime.onStartup.addListener(() => {
   forceDisarm();
 });
 
-// Sync badge when the service worker wakes; do not change armed mid-session.
 getState()
-  .then((state) => updateBadge(!!state.armed))
-  .catch(() => updateBadge(false));
+  .then((state) => updateBadge(!!state.armed, !!state.continuous))
+  .catch(() => updateBadge(false, false));
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "GET_STATE") {
     getState().then((state) => {
-      // Never report sticky armed from a previous crashed session without badge sync.
-      if (!state.armed) updateBadge(false);
+      if (!state.armed) updateBadge(false, false);
+      else updateBadge(true, !!state.continuous);
       sendResponse(state);
     });
+    return true;
+  }
+
+  if (message.type === "GET_RECENT_REQUESTS") {
+    (async () => {
+      let tabId = message.tabId;
+      if (!tabId) {
+        const [tab] = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        tabId = tab?.id;
+      }
+      sendResponse({
+        tabId,
+        requests: tabId ? recentByTab.get(tabId) || [] : [],
+      });
+    })();
+    return true;
+  }
+
+  if (message.type === "CLEAR_RECENT_REQUESTS") {
+    (async () => {
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      if (tab?.id) recentByTab.delete(tab.id);
+      sendResponse({ ok: true });
+    })();
     return true;
   }
 
@@ -80,9 +158,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         await setState(next);
 
         if (next.armed) {
-          await ensureInjectedInActiveTab();
-          const latest = await getState();
-          await broadcastState(latest);
+          await ensureInjectedInActiveTab(next);
         }
 
         sendResponse({ ok: true, state: next });
@@ -97,15 +173,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "REQUEST_INTERCEPTED") {
     getState()
       .then(async (state) => {
+        const keepArmed = !!state.continuous;
         const next = {
           ...state,
-          armed: false,
+          armed: keepArmed,
           lastIntercept: {
             url: message.url,
             method: message.method,
-            statusCode: state.statusCode,
+            statusCode: message.statusCode || state.statusCode,
             message: state.message,
-            contentType: state.contentType,
+            contentType: message.contentType || state.contentType,
             at: Date.now(),
           },
         };
@@ -122,9 +199,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return false;
 });
 
-function updateBadge(armed) {
-  chrome.action.setBadgeText({ text: armed ? "ON" : "" });
-  chrome.action.setBadgeBackgroundColor({ color: armed ? "#c0392b" : "#666666" });
+function updateBadge(armed, continuous) {
+  if (!armed) {
+    chrome.action.setBadgeText({ text: "" });
+    return;
+  }
+  chrome.action.setBadgeText({ text: continuous ? "∞" : "ON" });
+  chrome.action.setBadgeBackgroundColor({
+    color: continuous ? "#2d6a4f" : "#c0392b",
+  });
 }
 
 async function broadcastState(state) {
@@ -134,7 +217,10 @@ async function broadcastState(state) {
       tabs.map(async (tab) => {
         if (!tab.id || !isInjectableUrl(tab.url)) return;
         try {
-          await chrome.tabs.sendMessage(tab.id, { type: "STATE_UPDATED", state });
+          await chrome.tabs.sendMessage(tab.id, {
+            type: "STATE_UPDATED",
+            state,
+          });
         } catch {
           // content script may not be present yet
         }
@@ -150,7 +236,23 @@ function isInjectableUrl(url) {
   return /^(https?:|file:)/i.test(url);
 }
 
-async function ensureInjectedInActiveTab() {
+function toPageConfig(state) {
+  return {
+    armed: !!state.armed,
+    statusCode: state.statusCode ?? 500,
+    message: state.message || "",
+    contentType: state.contentType || "auto",
+    responseBody:
+      typeof state.responseBody === "string" ? state.responseBody : "",
+    urlFilter: state.urlFilter || "",
+    continuous: !!state.continuous,
+    selectedUrl: state.selectedUrl || "",
+    selectedMethod: state.selectedMethod || "",
+    armId: Number(state.armId) || 0,
+  };
+}
+
+async function ensureInjectedInActiveTab(state) {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id || !isInjectableUrl(tab.url)) return;
@@ -165,6 +267,27 @@ async function ensureInjectedInActiveTab() {
       target: { tabId: tab.id, allFrames: true },
       files: ["content.js"],
     });
+
+    const pageConfig = toPageConfig(state || (await getState()));
+
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
+      world: "MAIN",
+      func: (cfg) => {
+        window.__MRE_STATE = cfg;
+        window.dispatchEvent(new CustomEvent("__mre_config", { detail: cfg }));
+      },
+      args: [pageConfig],
+    });
+
+    try {
+      await chrome.tabs.sendMessage(tab.id, {
+        type: "STATE_UPDATED",
+        state: pageConfig,
+      });
+    } catch {
+      // ignore
+    }
   } catch (err) {
     console.warn("Mock Request Error: inject failed", err);
   }

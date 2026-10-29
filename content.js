@@ -2,23 +2,24 @@
   if (window.__mreContentInstalled) return;
   window.__mreContentInstalled = true;
 
-  const ATTR = "data-mre-config";
-
-  function writeDomConfig(state) {
-    const payload = {
+  function toPayload(state) {
+    return {
       armed: !!state.armed,
       statusCode: state.statusCode ?? 500,
       message: state.message || "",
-      contentType: state.contentType || "application/json",
-      responseBody: state.responseBody || "",
+      contentType: state.contentType || "auto",
+      responseBody:
+        typeof state.responseBody === "string" ? state.responseBody : "",
       urlFilter: state.urlFilter || "",
+      continuous: !!state.continuous,
+      selectedUrl: state.selectedUrl || "",
+      selectedMethod: state.selectedMethod || "",
       armId: Number(state.armId) || 0,
     };
-    try {
-      document.documentElement?.setAttribute(ATTR, JSON.stringify(payload));
-    } catch {
-      // ignore
-    }
+  }
+
+  function pushConfig(state) {
+    const payload = toPayload(state || { armed: false });
     window.postMessage(
       {
         source: "mock-request-error",
@@ -32,21 +33,18 @@
   function loadAndPush() {
     chrome.runtime.sendMessage({ type: "GET_STATE" }, (state) => {
       if (chrome.runtime.lastError || !state) {
-        // Fail safe: ensure page hooks are not armed.
-        writeDomConfig({ armed: false, armId: 0 });
+        pushConfig({ armed: false, armId: 0 });
         return;
       }
-      writeDomConfig(state);
+      pushConfig(state);
     });
   }
 
-  // Always start disarmed in the page; background may re-arm if needed.
-  writeDomConfig({ armed: false, armId: 0 });
   loadAndPush();
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "STATE_UPDATED" && message.state) {
-      writeDomConfig(message.state);
+      pushConfig(message.state);
       sendResponse({ ok: true });
       return false;
     }
@@ -60,7 +58,7 @@
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if ((area === "session" || area === "local") && changes.interceptState) {
-      writeDomConfig(changes.interceptState.newValue || { armed: false });
+      pushConfig(changes.interceptState.newValue || { armed: false });
     }
   });
 
@@ -74,20 +72,18 @@
     }
 
     if (event.data.type === "INTERCEPTED") {
-      let current = {};
-      try {
-        current = JSON.parse(
-          document.documentElement?.getAttribute(ATTR) || "{}"
-        );
-      } catch {
-        current = {};
-      }
+      const continuous = !!event.data.payload.continuous;
 
-      writeDomConfig({
-        ...current,
-        armed: false,
-        armId: event.data.payload.armId || current.armId || 0,
-      });
+      // One-shot: disarm immediately. Continuous: stay armed locally.
+      if (!continuous) {
+        pushConfig({
+          armed: false,
+          continuous: false,
+          statusCode: event.data.payload.statusCode,
+          contentType: event.data.payload.contentType,
+          armId: event.data.payload.armId || 0,
+        });
+      }
 
       chrome.runtime.sendMessage(
         {
@@ -95,13 +91,15 @@
           url: event.data.payload.url,
           method: event.data.payload.method,
           armId: event.data.payload.armId || 0,
+          statusCode: event.data.payload.statusCode,
+          contentType: event.data.payload.contentType,
         },
         (state) => {
           if (chrome.runtime.lastError || !state) {
-            writeDomConfig({ ...current, armed: false });
+            if (!continuous) pushConfig({ armed: false });
             return;
           }
-          writeDomConfig(state);
+          pushConfig(state);
         }
       );
     }

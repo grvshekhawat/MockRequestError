@@ -96,6 +96,143 @@ select:focus {
   font-weight: 400;
 }
 
+label.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+label.checkbox input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--ok);
+}
+
+.request-picker {
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.section-head h2 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+}
+
+.section-actions {
+  display: flex;
+  gap: 8px;
+}
+
+button.linkish {
+  border: none;
+  background: transparent;
+  color: var(--focus);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0;
+  cursor: pointer;
+}
+
+button.linkish:hover {
+  text-decoration: underline;
+}
+
+.selected-api {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #3d9a6a;
+  background: rgba(61, 154, 106, 0.12);
+}
+
+.selected-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #9ee0bc;
+}
+
+.selected-api code {
+  font-size: 11px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.request-list {
+  display: grid;
+  gap: 6px;
+  max-height: 150px;
+  overflow: auto;
+  margin-top: 8px;
+}
+
+.request-item {
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.request-item:hover {
+  border-color: var(--focus);
+}
+
+.request-item.active {
+  border-color: #3d9a6a;
+  box-shadow: inset 0 0 0 1px rgba(61, 154, 106, 0.35);
+}
+
+.request-item .method {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #9ee0bc;
+}
+
+.request-item .path {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.request-list .empty {
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .presets {
   display: flex;
   flex-wrap: wrap;
